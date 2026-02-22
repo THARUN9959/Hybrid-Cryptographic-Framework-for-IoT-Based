@@ -1,0 +1,22 @@
+services:
+
+  camera:
+    build: ./camera
+    volumes:
+      - ./keys:/keys
+      - ./shared:/shared
+    depends_on:
+      - gateway
+
+  gateway:
+    build: ./gateway
+    volumes:
+      - ./keys:/keys
+    depends_on:
+      - cloud
+
+  cloud:
+    build: ./cloud
+    volumes:
+      - ./keys:/keys
+      - ./shared:/shared
