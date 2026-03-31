@@ -6,9 +6,12 @@ Replay ID: composite key_id-nonce-timestamp
 Key Archive: Hybrid AES+RSA encrypted, decrypted and stored
 """
 import socket, json, os, time, threading, hashlib
+from collections import deque
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from llm_module import analyze_event
 
 cloud_private = serialization.load_pem_private_key(
     open("/keys/cloud_private.pem", "rb").read(),
@@ -18,6 +21,7 @@ cloud_private = serialization.load_pem_private_key(
 os.makedirs("storage", exist_ok=True)
 os.makedirs("key_archive", exist_ok=True)
 os.makedirs("/shared/decrypted", exist_ok=True)
+os.makedirs("/shared/control", exist_ok=True)
 
 # === Replay Protection ===
 seen_messages = set()
@@ -29,6 +33,60 @@ context_stats = {
     "HIGH_VALUE_IMAGE":  {"count": 0, "total_ms": 0},
     "CRITICAL_EVENT":    {"count": 0, "total_ms": 0}
 }
+
+# Temporal context for sequence-aware LLM reasoning.
+event_history = deque(maxlen=20)
+event_history_lock = threading.Lock()
+control_lock = threading.Lock()
+
+RISK_INTERVAL_SECONDS = {
+    "LOW": 60,
+    "MEDIUM": 30,
+    "HIGH": 15,
+    "CRITICAL": 10,
+}
+
+
+def extract_risk_level(analysis_text):
+    for line in analysis_text.splitlines():
+        if line.lower().startswith("risk:"):
+            return line.split(":", 1)[1].strip().upper()
+    return "MEDIUM"
+
+
+def publish_adaptive_policy(event_text, analysis_text):
+    risk = extract_risk_level(analysis_text)
+    interval = RISK_INTERVAL_SECONDS.get(risk, 30)
+
+    policy = {
+        "updated_at": time.time(),
+        "source": "cloud_llm",
+        "risk": risk,
+        "recommended_rotation_interval": interval,
+        "event": event_text,
+    }
+
+    control_path = "/shared/control/encryption_policy.json"
+    with control_lock:
+        with open(control_path, "w", encoding="utf-8") as f:
+            json.dump(policy, f, indent=2)
+
+    print(f"🔐 Adaptive policy → risk:{risk} interval:{interval}s")
+
+
+def analyze_and_store(event_text, save_path):
+    with event_history_lock:
+        stamped_event = f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {event_text}"
+        event_history.append(stamped_event)
+        history_snapshot = list(event_history)
+
+    analysis = analyze_event(event_text, history_snapshot)
+    print(f"🤖 LLM Analysis: {analysis}")
+    publish_adaptive_policy(event_text, analysis)
+
+    with open(save_path, "w", encoding="utf-8") as f:
+        f.write(event_text + "\n")
+        f.write(f"LLM Analysis: {analysis}\n")
 
 
 def recv_all(conn):
@@ -125,6 +183,21 @@ def packet_server():
             if filename.endswith(".alert"):
                 alert = json.loads(decrypted.decode())
                 print(f"🟡 Alert: {alert.get('type','?')} | {dec_time:.2f}ms | {aes_variant} | key:{key_id} | pid:{pid}...")
+            elif filename.endswith(".txt"):
+                event_text = decrypted.decode(errors="ignore").strip()
+                print(f"🔵 Event: {event_text} | {dec_time:.2f}ms | {aes_variant} | key:{key_id} | pid:{pid}...")
+
+                save_path = f"/shared/decrypted/{filename}"
+                with open(save_path, "w", encoding="utf-8") as f:
+                    f.write(event_text + "\n")
+                    f.write("LLM Analysis: processing\n")
+
+                # Avoid blocking packet intake on slow LLM inference.
+                threading.Thread(
+                    target=analyze_and_store,
+                    args=(event_text, save_path),
+                    daemon=True,
+                ).start()
             else:
                 save_path = f"/shared/decrypted/{filename}"
                 with open(save_path, "wb") as f:

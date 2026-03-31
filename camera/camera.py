@@ -123,6 +123,29 @@ class KeyManager:
             return old_sets
         return None
 
+    def update_interval(self, new_interval, force_rotate=False):
+        """Update key rotation interval and optionally force immediate rotation."""
+        if new_interval <= 0:
+            return False
+
+        changed = new_interval != self.interval
+        self.interval = new_interval
+
+        if force_rotate:
+            for keys in self.key_sets.values():
+                for mk in keys:
+                    mk.expires_at = time.time() - 1
+            return changed
+
+        # Apply tighter interval bound to currently active key windows.
+        now = time.time()
+        max_exp = now + self.interval
+        for keys in self.key_sets.values():
+            for mk in keys:
+                if mk.expires_at > max_exp:
+                    mk.expires_at = max_exp
+        return changed
+
     def cleanup_expired(self):
         """Remove keys past grace period (called by archive flow)."""
         pass  # Old keys are archived then discarded
@@ -249,9 +272,47 @@ time.sleep(5)
 
 os.makedirs("/shared/raw", exist_ok=True)
 os.makedirs("/shared/frames", exist_ok=True)
+os.makedirs("/shared/metadata", exist_ok=True)
+os.makedirs("/shared/control", exist_ok=True)
 
 key_mgr = KeyManager(n=5, interval=60)
 last_heartbeat = time.time()
+policy_path = "/shared/control/encryption_policy.json"
+last_policy_mtime = 0.0
+
+
+def apply_adaptive_policy():
+    global last_policy_mtime
+
+    if not os.path.exists(policy_path):
+        return
+
+    try:
+        mtime = os.path.getmtime(policy_path)
+        if mtime <= last_policy_mtime:
+            return
+
+        with open(policy_path, "r", encoding="utf-8") as f:
+            policy = json.load(f)
+
+        recommended = int(policy.get("recommended_rotation_interval", key_mgr.interval))
+        # Keep interval inside safe system bounds.
+        recommended = max(10, min(60, recommended))
+        risk = str(policy.get("risk", "MEDIUM")).upper()
+
+        old_interval = key_mgr.interval
+        force_rotate = recommended < old_interval
+        changed = key_mgr.update_interval(recommended, force_rotate=force_rotate)
+
+        if changed:
+            print(
+                f"🔐 Adaptive encryption policy applied | risk:{risk} "
+                f"interval:{old_interval}s→{recommended}s"
+            )
+
+        last_policy_mtime = mtime
+    except Exception as e:
+        print(f"Adaptive policy read error: {e}")
 
 print("=" * 60)
 print("Policy-Enforced Context-Bound Crypto Engine v2")
@@ -262,6 +323,8 @@ print(f"Policy version: {CRYPTO_POLICY['LOW_LATENCY_ALERT']['policy_version']}")
 print("=" * 60)
 
 while True:
+    apply_adaptive_policy()
+
     # === Key Lifecycle Check ===
     old_sets = key_mgr.rotate_if_needed()
     if old_sets:
@@ -371,6 +434,82 @@ while True:
                 pass
         else:
             print(f"  ✗ FAILED: {file}")
+
+    # === Process Metadata Events ===
+    try:
+        metadata_files = sorted([f for f in os.listdir("/shared/metadata") if f.endswith(".txt")])
+    except FileNotFoundError:
+        metadata_files = []
+
+    for file in metadata_files:
+        meta_path = f"/shared/metadata/{file}"
+
+        try:
+            with open(meta_path, "rb") as f:
+                data = f.read()
+            if len(data) == 0:
+                continue
+        except (PermissionError, FileNotFoundError):
+            continue
+
+        context = "HIGH_VALUE_IMAGE"
+        policy = CRYPTO_POLICY[context]
+        managed_key = key_mgr.get_key(policy["key_class"])
+
+        start_enc = time.time()
+
+        aes = AESGCM(managed_key.key)
+        nonce = os.urandom(12)
+        ciphertext = aes.encrypt(nonce, data, None)
+
+        encrypted_key = cloud_rsa_public.encrypt(
+            managed_key.key,
+            padding.OAEP(
+                mgf=padding.MGF1(hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+
+        timestamp = time.time()
+        header = {
+            "packet_id": str(uuid.uuid4()),
+            "context": context,
+            "policy_version": policy["policy_version"],
+            "algorithm": policy["encryption"],
+            "signature_scheme": policy["signature"],
+            "key_id": managed_key.key_id,
+            "key_class": policy["key_class"],
+            "rotation_id": key_mgr.rotation_id,
+            "timestamp": timestamp,
+            "nonce": nonce.hex(),
+            "filename": file
+        }
+
+        payload = build_signed_payload(header, ciphertext)
+        signature = sign_payload(policy, payload)
+
+        end_enc = time.time()
+        enc_time = (end_enc - start_enc) * 1000
+
+        print(f"[🔵 EVENT] {enc_time:.2f}ms | {file} | {policy['encryption']}+{policy['signature']} | key:{managed_key.key_id} | {len(data)}B→{len(ciphertext)}B")
+
+        packet = {
+            "header": header,
+            "encrypted_key": encrypted_key.hex(),
+            "ciphertext": ciphertext.hex(),
+            "signature": signature.hex()
+        }
+
+        msg = json.dumps(packet).encode()
+        if send_packet("gateway", 5000, msg):
+            print(f"  → Event sent (pid:{header['packet_id'][:8]}...)")
+            try:
+                os.remove(meta_path)
+            except FileNotFoundError:
+                pass
+        else:
+            print(f"  ✗ FAILED EVENT: {file}")
 
     # === Periodic Heartbeat (LOW_LATENCY_ALERT) ===
     if time.time() - last_heartbeat > 15:
