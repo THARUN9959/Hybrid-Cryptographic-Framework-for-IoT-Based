@@ -2,6 +2,8 @@ param(
 	[switch]$QueryConsole
 )
 
+$OllamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "tinyllama" }
+
 # Navigate to script directory so docker-compose finds its config
 Set-Location $PSScriptRoot
 
@@ -61,8 +63,8 @@ Start-Sleep -Seconds 8
 Write-Host "  Containers ready!" -ForegroundColor Green
 
 # Step 3: Start Ollama model on host
-Write-Host "[3/6] Starting Ollama model (mistral)..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host 'OLLAMA (HOST) - mistral' -ForegroundColor Cyan; ollama run mistral"
+Write-Host "[3/6] Starting Ollama model ($OllamaModel)..." -ForegroundColor Yellow
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host 'OLLAMA (HOST) - $OllamaModel' -ForegroundColor Cyan; ollama run $OllamaModel"
 
 # Step 4: Launch YOLO host detector
 Write-Host "[4/6] Launching YOLO detector..." -ForegroundColor Yellow

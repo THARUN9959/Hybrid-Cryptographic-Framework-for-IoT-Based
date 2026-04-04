@@ -7,7 +7,7 @@ import requests
 
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "tinyllama")
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
 OLLAMA_RETRIES = int(os.getenv("OLLAMA_RETRIES", "2"))
 LLM_HISTORY_WINDOW = int(os.getenv("LLM_HISTORY_WINDOW", "5"))

@@ -22,7 +22,7 @@ services:
       - ./shared:/shared
     environment:
       OLLAMA_URL: http://host.docker.internal:11434/api/generate
-      OLLAMA_MODEL: mistral
+      OLLAMA_MODEL: tinyllama
       OLLAMA_TIMEOUT_SECONDS: "120"
       OLLAMA_RETRIES: "2"
     extra_hosts:
