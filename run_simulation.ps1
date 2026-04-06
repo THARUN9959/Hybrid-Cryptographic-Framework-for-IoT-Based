@@ -48,12 +48,30 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Secure CCTV - Full Pipeline Launcher" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
+# Step 0: Ensure cryptographic keys exist
+$requiredKeys = @(
+	"keys\camera_private.pem",
+	"keys\camera_public.pem",
+	"keys\camera_ed_private.pem",
+	"keys\camera_ed_public.pem",
+	"keys\cloud_private.pem",
+	"keys\cloud_public.pem"
+)
+
+$missingKeys = $requiredKeys | Where-Object { -not (Test-Path $_) }
+if ($missingKeys.Count -gt 0) {
+	Write-Host "`n[0/6] Keys missing. Generating keys..." -ForegroundColor Yellow
+	python generate_keys.py
+}
+
 # Step 1: Clean up old artifacts
 Write-Host "`n[1/6] Cleaning shared folders..." -ForegroundColor Yellow
 Remove-Item shared\raw\* -ErrorAction SilentlyContinue
 Remove-Item shared\frames\* -ErrorAction SilentlyContinue
 Remove-Item shared\decrypted\* -ErrorAction SilentlyContinue
 Remove-Item shared\metadata\* -ErrorAction SilentlyContinue
+Remove-Item shared\raw\processed\* -ErrorAction SilentlyContinue
+Remove-Item shared\metadata\processed\* -ErrorAction SilentlyContinue
 
 # Step 2: Build and start Docker containers
 Write-Host "[2/6] Building & starting Docker containers..." -ForegroundColor Yellow

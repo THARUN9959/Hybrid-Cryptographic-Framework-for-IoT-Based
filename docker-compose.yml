@@ -20,6 +20,7 @@ services:
     volumes:
       - ./keys:/keys
       - ./shared:/shared
+      - ./data:/data
     environment:
       OLLAMA_URL: http://host.docker.internal:11434/api/generate
       OLLAMA_MODEL: tinyllama

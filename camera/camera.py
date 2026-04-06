@@ -10,6 +10,7 @@ Structural Components:
   5. Context Classifier — Derives security context from sensor data
 """
 import os, time, json, uuid, socket, hashlib
+import shutil
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes, serialization
@@ -274,6 +275,8 @@ os.makedirs("/shared/raw", exist_ok=True)
 os.makedirs("/shared/frames", exist_ok=True)
 os.makedirs("/shared/metadata", exist_ok=True)
 os.makedirs("/shared/control", exist_ok=True)
+os.makedirs("/shared/raw/processed", exist_ok=True)
+os.makedirs("/shared/metadata/processed", exist_ok=True)
 
 key_mgr = KeyManager(n=5, interval=60)
 last_heartbeat = time.time()
@@ -427,9 +430,10 @@ while True:
         if send_packet("gateway", 5000, msg):
             print(f"  → Sent (pid:{header['packet_id'][:8]}...)")
             try:
-                os.remove(raw_path)
+                shutil.move(raw_path, f"/shared/raw/processed/{file}")
                 if os.path.exists(meta_path):
-                    os.remove(meta_path)
+                    meta_file = os.path.basename(meta_path)
+                    shutil.move(meta_path, f"/shared/raw/processed/{meta_file}")
             except FileNotFoundError:
                 pass
         else:
@@ -505,7 +509,7 @@ while True:
         if send_packet("gateway", 5000, msg):
             print(f"  → Event sent (pid:{header['packet_id'][:8]}...)")
             try:
-                os.remove(meta_path)
+                shutil.move(meta_path, f"/shared/metadata/processed/{file}")
             except FileNotFoundError:
                 pass
         else:

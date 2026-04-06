@@ -22,6 +22,9 @@ os.makedirs("storage", exist_ok=True)
 os.makedirs("key_archive", exist_ok=True)
 os.makedirs("/shared/decrypted", exist_ok=True)
 os.makedirs("/shared/control", exist_ok=True)
+os.makedirs("/data/key_archive", exist_ok=True)
+os.makedirs("/data/metadata", exist_ok=True)
+os.makedirs("/data/recordings", exist_ok=True)
 
 # === Replay Protection ===
 seen_messages = set()
@@ -192,6 +195,11 @@ def packet_server():
                     f.write(event_text + "\n")
                     f.write("LLM Analysis: processing\n")
 
+                data_meta_path = f"/data/metadata/{filename}"
+                with open(data_meta_path, "w", encoding="utf-8") as f:
+                    f.write(event_text + "\n")
+                    f.write("LLM Analysis: processing\n")
+
                 # Avoid blocking packet intake on slow LLM inference.
                 threading.Thread(
                     target=analyze_and_store,
@@ -201,6 +209,10 @@ def packet_server():
             else:
                 save_path = f"/shared/decrypted/{filename}"
                 with open(save_path, "wb") as f:
+                    f.write(decrypted)
+
+                data_recording_path = f"/data/recordings/{filename}"
+                with open(data_recording_path, "wb") as f:
                     f.write(decrypted)
 
                 ctx_icon = "🔴" if context == "CRITICAL_EVENT" else "🟢"
@@ -255,6 +267,10 @@ def archive_server():
             archive_count += 1
             archive_path = f"key_archive/archive_{archive_count}.json"
             with open(archive_path, "w") as f:
+                json.dump(archive_json, f, indent=2)
+
+            data_archive_path = f"/data/key_archive/archive_{archive_count}.json"
+            with open(data_archive_path, "w", encoding="utf-8") as f:
                 json.dump(archive_json, f, indent=2)
 
             print(f"🔑 Archive #{rotation_id} recovered: {total_keys} keys (K1/K2/K3) → {archive_path}")

@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from datetime import datetime
 from collections import Counter
 from typing import Set, Tuple
@@ -152,6 +153,8 @@ def build_event_text(detected_objects: list, is_night: bool, low_light: bool, sc
 
 def main():
     os.makedirs("shared/metadata", exist_ok=True)
+    os.makedirs("shared/suspicious", exist_ok=True)
+    os.makedirs("shared/raw", exist_ok=True)
 
     model = YOLO("yolov8n.pt")
     cap = cv2.VideoCapture(0)
@@ -209,14 +212,36 @@ def main():
         current_time = time.time()
         
         # Only trigger if: (a) objects changed AND (b) cooldown exceeded
-        if current_detected != last_detected and (current_time - last_event_time >= EVENT_COOLDOWN):
+        if current_detected and current_detected != last_detected and (current_time - last_event_time >= EVENT_COOLDOWN):
+            threat, reason, note = classify_threat(detected_objects, is_night, low_light, scene_mode)
+
             event_text = build_event_text(detected_objects, is_night, low_light, scene_mode)
             file_path = f"shared/metadata/event_{event_id:04d}.txt"
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(event_text)
 
-            threat, reason, note = classify_threat(detected_objects, is_night, low_light, scene_mode)
+            # Keep a visual snapshot alongside each generated event.
+            snapshot_path = f"shared/suspicious/event_{event_id:04d}.jpg"
+            cv2.imwrite(snapshot_path, frame)
+
+            # Feed Camera service pipeline by writing raw frame + metadata.
+            raw_path = f"shared/raw/frame_{event_id:04d}.jpg"
+            raw_meta_path = f"shared/raw/frame_{event_id:04d}.meta"
+            cv2.imwrite(raw_path, frame)
+
+            if threat == "CRITICAL":
+                motion_score = 4000000
+            elif threat == "HIGH":
+                motion_score = 3200000
+            else:
+                motion_score = 1500000
+
+            with open(raw_meta_path, "w", encoding="utf-8") as mf:
+                json.dump({"motion_score": motion_score, "timestamp": current_time}, mf)
+
             print(f"NEW EVENT #{event_id}: {reason} | {threat} | {note}")
+            print(f"  Snapshot saved: {snapshot_path}")
+            print(f"  Raw frame queued: {raw_path}")
             
             event_id += 1
             last_event_time = current_time
